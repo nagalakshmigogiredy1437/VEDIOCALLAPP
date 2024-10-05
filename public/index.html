@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Call App</title>
+    <style>
+      video {
+        width: 300px;
+        height: 200px;
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <video id="localVideo" autoplay muted></video>
+      <video id="remoteVideo" autoplay></video>
+    </div>
+
+    <input type="text" id="roomID" placeholder="Enter room ID" />
+    <button id="joinRoom">Join Room</button>
+    <button id="startCall" disabled>Start Call</button>
+    <button id="endCall" disabled>End Call</button>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      let localStream;
+      let peerConnection;
+      const configuration = {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      };
+      const localVideo = document.getElementById("localVideo");
+      const remoteVideo = document.getElementById("remoteVideo");
+      let roomID = "";
+
+      document.getElementById("joinRoom").addEventListener("click", () => {
+        roomID = document.getElementById("roomID").value;
+        socket.emit("join-room", roomID);
+        console.log("Joined room:", roomID);
+        document.getElementById("startCall").disabled = false; // Enable the start call button
+        document.getElementById("endCall").disabled = true; // Disable end call button initially
+      });
+
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          localVideo.srcObject = stream;
+          localStream = stream;
+        });
+
+      document.getElementById("startCall").addEventListener("click", startCall);
+      document.getElementById("endCall").addEventListener("click", endCall);
+
+      function startCall() {
+        peerConnection = new RTCPeerConnection(configuration);
+        localStream
+          .getTracks()
+          .forEach((track) => peerConnection.addTrack(track, localStream));
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit("candidate", { roomID, candidate: event.candidate });
+          }
+        };
+
+        peerConnection.ontrack = (event) => {
+          remoteVideo.srcObject = event.streams[0];
+        };
+
+        peerConnection
+          .createOffer()
+          .then((offer) => {
+            return peerConnection.setLocalDescription(offer);
+          })
+          .then(() => {
+            socket.emit("call", {
+              roomID,
+              offer: peerConnection.localDescription,
+            });
+          });
+
+        document.getElementById("endCall").disabled = false; // Enable the end call button
+      }
+
+      socket.on("call", (offer) => {
+        peerConnection = new RTCPeerConnection(configuration);
+        localStream
+          .getTracks()
+          .forEach((track) => peerConnection.addTrack(track, localStream));
+
+        peerConnection
+          .setRemoteDescription(new RTCSessionDescription(offer))
+          .then(() => {
+            return peerConnection.createAnswer();
+          })
+          .then((answer) => {
+            return peerConnection.setLocalDescription(answer);
+          })
+          .then(() => {
+            socket.emit("answer", {
+              roomID,
+              answer: peerConnection.localDescription,
+            });
+          });
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit("candidate", { roomID, candidate: event.candidate });
+          }
+        };
+
+        peerConnection.ontrack = (event) => {
+          remoteVideo.srcObject = event.streams[0];
+        };
+
+        document.getElementById("endCall").disabled = false; // Enable end call button for the receiver
+      });
+
+      socket.on("answer", (answer) => {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+      });
+
+      socket.on("candidate", (candidate) => {
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      });
+
+      // Listen for the end call event from the server
+      socket.on("end-call", () => {
+        endCall(); // Call the endCall function when the event is received
+      });
+
+      function endCall() {
+        if (peerConnection) {
+          peerConnection.close();
+          peerConnection = null; // Reset peerConnection for new calls
+        }
+        document.getElementById("endCall").disabled = true; // Disable end call button
+        document.getElementById("startCall").disabled = false; // Re-enable start call button
+      }
+    </script>
+  </body>
+</html>
